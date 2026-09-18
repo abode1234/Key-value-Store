@@ -70,6 +70,10 @@ pub fn log_append(fp: &mut File, line: &str) {
     fp.sync_all().unwrap(); 
 }
 
+#[cfg(test)]
+#[path = "key-store.test.rs"]
+mod tests;
+
 fn main() {
     let dir = "data";
     
