@@ -148,7 +148,11 @@ func (b BNode) setOffset(idx uint16, val uint16) {
 // KeyValuePos:[0-3] -> [4-11] -> [12-13] -> [14-17] -> [18...]
 //             HEADER	pointer	offset	klen+vlen	key
 //              (4B)		(8B)		(2B)		(4B)   (up to 1000B)
-
+// return this position value 
+// HEADER : 4 bytes
+// 8*nkeys : 8 bytes number of pointers in the node
+// 2*nkeys : 2 bytes  number of offsets in the node
+// offset : 2 bytes
 func kvPos(b BNode, idx uint16) uint16 {
 	utils.Assert(idx <= b.nkeys(), "index out of range")
 		return  HEADER + 8*b.nkeys() + 2*b.nkeys() + b.getOffset(idx) // position of the key-value pair in the node
