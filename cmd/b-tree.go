@@ -1,93 +1,168 @@
 package main
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"github.com/abode1234/golang/key-value/utils-go"
+)
 
 type BNode struct {
 	data []byte
 }
 
+// type of the node 
 const (
-	BNODE_NODE = 1
-	BNODE_LEAF = 2
+	BNODE_NODE = 1 // internal node
+	BNODE_LEAF = 2 // leaf node
 )
 
-// The page size is defined to be 4K bytes. A larger page size such as 8K or 16K also works.
-// We also add some constraints on the size of the keys and values. So that a node with a
-// single KV pair always fits on a single page. If you need to support bigger keys or bigger
-// values, you have to allocate extra pages for them and that adds complexity.
-
+// BTree structure
 type BTree struct {
-	root uint64
-	get  func(uint64) BNode
-	new  func(BNode) uint64
-	del  func(uint64)
+	root uint64 // disk page number
+	// callbacks to manage the disk pages references
+	get func(uint64)  BNode // to references the pointers
+	new func(BNode) uint64  // to allocate a new page
+	del func(uint64)		// to deallocate a page
 }
 
-const HEADER_SIZE = 4
-const BTREE_PAGE_SIZE = 4096
-const BTREE_MAX_KEY_SIZE = 1000
-const BTREE_MAX_VALUE_SIZE = 1000
+// Header logical structure
 
-func assert(b bool) {
-	panic("unimplemented")
-}
+const (
+	HEADER          = 4    // header size in bytes
+	BTREE_PAGE_SIZE = 4096 // page size in bytes
+	// size of the constants in the header
+	BTREE_MAX_KEYS_SIZE   = 1000 // max size (bytes) of a single key
+	BTREE_MAX_VALUES_SIZE = 3000 // max size (bytes) of a single value
+)
+
+// init the constants
+// the header is composed by the following elements 
+// Offset:  [0-3]   [4-11]    [12-13]   [14-17]   [18...]        [...]
+//          HEADER  pointer   offset    klen+vlen key            value
+//          (4B)    (8B)      (2B)      (4B)      (up to 1000B)  (up to 3000B)
+// 1. HEADER is 4 bytes size  type node btype [2B] nkeys [2B]
+// 2. 8B is the pointer to the next node  uint64
+// 3. 2B is the offset to the key value pair uint16
+// 4. 4B is the key length(klen) and the value length(vlen) uint16
+// 5. BTREE_MAX_KEYS_SIZE is the maximum number of keys in the node
+// 6. BTREE_MAX_VALUES_SIZE is the maximum number of values in the node
 
 func init() {
-	node1max := HEADER_SIZE + 8 + 2 + 4 + BTREE_MAX_KEY_SIZE + BTREE_MAX_VALUE_SIZE
-	assert(node1max <= BTREE_PAGE_SIZE)
+	node1max := HEADER + 8 + 2 + 4 + BTREE_MAX_KEYS_SIZE + BTREE_MAX_VALUES_SIZE
+	utils.Assert(node1max <= BTREE_PAGE_SIZE, "exceeded the page size")
 }
 
-//Since a node is just an array of bytes, we’ll add some helper functions to access its contents.
+// Header functions
+// return the node type
+// the first two bytes of the header it's define the node type
+// in memory digram 
+// Byte:      [0] [1] [2] [3] [4] [5] ...
+// Content:   |--type--|--nkeys--| ... rest of data
+//            (2 bytes) (2 bytes)
 
-
-// Heder
-
-func (node BNode) btype() uint16 {
-	return binary.LittleEndian.Uint16(node.data)
+func  (b BNode) btype() uint16 {
+	return  binary.LittleEndian.Uint16(b.data) // read the btype 0 -> 1
 }
 
-func (node BNode) nkeys() uint16{
-	return binary.LittleEndian.Uint16(node.data[2:4])
+// return the number of keys in the node
+// the second two bytes of the header it's define the number of keys
+// digram
+//	Byte:      [0] [1] [2] [3] [4] [5] ...
+//	Content:   |--type--|--nkeys--| ... rest of data
+//	           (2 bytes) (2 bytes)
+func (b BNode) nkeys() uint16 {
+	return binary.LittleEndian.Uint16(b.data[2:4]) // read the nkeys 2 -> 3
 }
 
-func (node BNode) setHeader(btype uint16, nkeys uint16) {
-	binary.LittleEndian.PutUint16(node.data[0:2], btype)
-	binary.LittleEndian.PutUint16(node.data[2:4], nkeys)
+// set a header with the first two bytes for the node type and the second two bytes for the number of keys
+// digram
+//	Byte:      [0] [1] [2] [3] [4] [5] ...
+//	Content:   |--type--|--nkeys--| ... rest of data
+//	           (2 bytes) (2 bytes)
+func (b BNode) setHeader(btype uint16, nkeys uint16) {
+	binary.LittleEndian.PutUint16(b.data, btype)      // set the node type (btype) 0 -> 1
+	binary.LittleEndian.PutUint16(b.data[2:4], nkeys) // set the number of keys (nkeys) 2 -> 3
 }
 
-// Pointers
+// Pointer functions
+// return the pointer to the next node (child node) size 8 bytes uint64
+// digram
+// Offset:    [4-11]
+//            pointer
+//            (8B)
 
-func (node BNode) getPtr(idx uint16) uint64{
-	assert(idx < node.nkeys())
-	pos := HEADER_SIZE + 2 + idx*8
-	return binary.LittleEndian.Uint64(node.data[pos:])
+func (b BNode) getPtr(idx uint16) uint64 {
+	utils.Assert(idx < b.nkeys(), "index out of range")  // check the index
+	return binary.LittleEndian.Uint64(b.data[HEADER+idx*8:]) // read the pointer 4 -> 11
 }
 
-func (node BNode) setPtr(idx uint16, val uint64) {
-	assert(idx < node.nkeys())
-	pos := HEADER_SIZE + 8*idx
-	binary.LittleEndian.PutUint64(node.data[pos:], val)
+// update the pointer to the next node (child node) size 8 bytes uint64
+// digram
+// Offset:    [4-11]
+//            pointer
+//            (8B)
+
+func (b BNode) setPtr(idx uint16, val uint64) {
+	utils.Assert(idx < b.nkeys(), "index out of range")
+	binary.LittleEndian.PutUint64(b.data[HEADER+idx*8:], val) // write the pointer 4 -> 11
 }
 
-// • The offset is relative to the position of the first KV pair.
-// • The offset of the first KV pair is always zero, so it is not stored in the list.
-// • We store the offset to the end of the last KV pair in the offset list, which is used to
-// determine the size of the node
+// Offset functions
+// returns the position of the offset entry in the header, size 2 bytes uint16
+// digram
+// OffsetPos:    [4-11] -> [12-13]
+//               pointer	offset
+//               (8B)		(2B)
 
-
-func offsetPos(node BNode, idx uint16) uint16 {
-	assert(1 <= idx && idx <= node.nkeys())
-	return HEADER_SIZE + 8*node.nkeys() + 2*(idx-1)
+func offsetPos(b BNode, idx uint16) uint16 {
+	utils.Assert(1 <= idx && idx <= b.nkeys(), "index out of range")
+	return HEADER + 8*b.nkeys() + 2*(idx-1) // position of the offset entry in header
 }
 
+// returns the value of the offset i.e. the location of the kv-pair at given index in the node, size 2 bytes uint16
+// digram
+// Offset:    [4-11] -> [12-13]
+//            pointer	offset
+//            (8B)		(2B)
 
-func (node BNode) getOffset(idx uint16) uint16 {
+func (b BNode) getOffset(idx uint16) uint16 {
 	if idx == 0 {
 		return 0
 	}
-	return binary.LittleEndian.Uint16(node.data[offsetPos(node, idx):])
+	return binary.LittleEndian.Uint16(b.data[offsetPos(b, idx):]) // read the offset 4 -> 13
 }
 
-func (node BNode) setOffset(idx uint16, offset uint16) {
-	binary.LittleEndian.PutUint16(node.data[offsetPos(node, idx):], offset)
+// update the value of the offset i.e. the location of the kv-pair at given index in the node, size 2 bytes uint16
+// digram
+// Offset:    [4-11] -> [12-13]
+//            pointer	offset
+//            (8B)		(2B)
+
+func (b BNode) setOffset(idx uint16, val uint16) {
+	binary.LittleEndian.PutUint16(b.data[offsetPos(b, idx):], val) // write the offset 4 -> 13
+}
+
+// Key-value functions
+
+// returns the position of the key-value pair in the node, size 2 bytes uint16
+// digram
+// KeyValuePos:[0-3] -> [4-11] -> [12-13] -> [14-17] -> [18...]
+//             HEADER	pointer	offset	klen+vlen	key
+//              (4B)		(8B)		(2B)		(4B)   (up to 1000B)
+
+func kvPos(b BNode, idx uint16) uint16 {
+	utils.Assert(idx <= b.nkeys(), "index out of range")
+		return  HEADER + 8*b.nkeys() + 2*b.nkeys() + b.getOffset(idx) // position of the key-value pair in the node
+}
+
+// returns the key of the key-value pair at given index in the node, size 4 bytes uint32
+// digram
+// Key:    [0-3] -> [4-11] -> [12-13] -> [14-17] -> [18...]
+//         HEADER	pointer	offset	klen+vlen	key
+//          (4B)		(8B)		(2B)		(4B)   (up to 1000B)
+
+func (b BNode) getKey(idx uint16) []byte {
+	utils.Assert(idx < b.nkeys(), "index out of range")  // check the index
+	pos := kvPos(b, idx) // position of the key-value pair in the node
+	klen := binary.LittleEndian.Uint16(b.data[pos:]) // read the key length 4 -> 17
+	return b.data[pos+4:][:klen] // read the key 4 -> 17
 }
